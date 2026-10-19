@@ -1,125 +1,123 @@
 package course.crud;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
-import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.List;
 
-public class Application {
-    public static void main(String[] args) throws IOException {
-        int port = Integer.parseInt(System.getProperty("port", "8080"));
-        Path dataFile = Path.of(System.getProperty("data.file", "data/customers.csv"));
-        CustomerRepository repository = new CustomerRepository(dataFile);
-        // The application is for local coursework, so listen only on the local computer.
-        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
-        server.createContext("/", exchange -> {
-            try {
-                handle(exchange, repository);
-            } catch (IllegalArgumentException e) {
-                send(exchange, 400, "Invalid request.");
-            } catch (Exception e) {
-                System.err.println("Request failed: " + e.getClass().getSimpleName());
-                send(exchange, 500, "The request could not be completed.");
-            } finally {
-                exchange.close();
-            }
-        });
-        server.start();
-        System.out.println(LocalDateTime.now() + " INFO Customer Manager started successfully");
-        System.out.println("Java version: " + System.getProperty("java.version"));
-        System.out.println("HTTP server listening at http://127.0.0.1:" + port);
-        System.out.println("Loaded customers: " + repository.findAll("").size());
-        System.out.println("Storage: " + dataFile);
-        System.out.println("Press Ctrl+C to stop the application.");
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> server.stop(0)));
-    }
+public class CustomerView {
 
-    private static void handle(HttpExchange exchange, CustomerRepository repository) throws IOException {
-        String path = exchange.getRequestURI().getPath();
-        String method = exchange.getRequestMethod();
-        if (method.equals("GET") && path.equals("/")) {
-            Map<String, String> parameters = parse(exchange.getRequestURI().getRawQuery());
-            String query = parameters.getOrDefault("q", "");
-            long editId = Long.parseLong(parameters.getOrDefault("edit", "0"));
-            Customer selected = editId == 0 ? null : repository.findById(editId);
-            if (editId != 0 && selected == null) {
-                send(exchange, 404, "Customer not found.");
-                return;
-            }
-            send(exchange, 200, CustomerView.page(repository.findAll(query), selected, query,
-                    parameters.getOrDefault("message", ""), ""));
-        } else if (method.equals("POST") && (path.equals("/save") || path.equals("/delete"))) {
-            // Reject browser requests originating on a different website.
-            String origin = exchange.getRequestHeaders().getFirst("Origin");
-            String expectedOrigin = "http://" + exchange.getRequestHeaders().getFirst("Host");
-            if (origin != null && !origin.equals(expectedOrigin)) {
-                send(exchange, 403, "Cross-origin form submission rejected.");
-                return;
-            }
-            byte[] body = exchange.getRequestBody().readNBytes(16385);
-            if (body.length > 16384) {
-                send(exchange, 413, "Request too large.");
-                return;
-            }
-            Map<String, String> parameters = parse(new String(body, StandardCharsets.UTF_8));
-            long id = Long.parseLong(parameters.getOrDefault("id", "0"));
-            if (id < 0) throw new IllegalArgumentException("Invalid id");
-            if (path.equals("/delete")) {
-                if (!repository.delete(id)) send(exchange, 404, "Customer not found.");
-                else redirect(exchange, "Customer+deleted.");
-            } else {
-                String first = parameters.getOrDefault("firstName", "").strip();
-                String last = parameters.getOrDefault("lastName", "").strip();
-                String email = parameters.getOrDefault("email", "").strip();
-                Customer customer = new Customer(id, first, last, email);
-                boolean valid = validName(first) && validName(last) && email.length() <= 120
-                        && email.matches("[^\\s@]+@[^\\s@]+\\.[^\\s@]+");
-                if (!valid) {
-                    send(exchange, 400, CustomerView.page(repository.findAll(""), customer, "", "",
-                            "Enter both names (up to 60 characters) and a valid email address."));
-                } else if (!repository.save(id, first, last, email)) {
-                    send(exchange, 404, "Customer not found.");
-                } else redirect(exchange, id == 0 ? "Customer+added." : "Customer+updated.");
-            }
-        } else {
-            send(exchange, path.equals("/") || path.equals("/save") || path.equals("/delete") ? 405 : 404,
-                    "Page or method not available.");
+    public static String page(List<Customer> customers, Customer selected, String query, String message, String error) {
+        boolean isEditing = selected != null && selected.id() != 0;
+        long editId = isEditing ? selected.id() : 0;
+        String firstName = selected != null ? selected.firstName() : "";
+        String lastName = selected != null ? selected.lastName() : "";
+        String email = selected != null ? selected.email() : "";
+
+        StringBuilder rows = new StringBuilder();
+        int index = 1;
+        for (Customer c : customers) {
+            rows.append("<tr>")
+                .append("<td>").append(index++).append("</td>")
+                .append("<td>").append(escape(c.firstName())).append("</td>")
+                .append("<td>").append(escape(c.lastName())).append("</td>")
+                .append("<td>").append(escape(c.email())).append("</td>")
+                .append("<td>")
+                .append("<a href='/?edit=").append(c.id()).append("&q=").append(escape(query)).append("' style='margin-right:8px; text-decoration:none; color:#0066cc;'>Düzenle</a>")
+                .append("<form action='/delete' method='POST' style='display:inline;' onsubmit=\"return confirm('Bu müşteriyi silmek istediğinize emin misiniz?');\">")
+                .append("<input type='hidden' name='id' value='").append(c.id()).append("'>")
+                .append("<button type='submit' style='background:#dc3545; color:white; border:none; padding:3px 8px; border-radius:3px; cursor:pointer;'>Sil</button>")
+                .append("</form>")
+                .append("</td>")
+                .append("</tr>");
         }
+
+        return """
+            <!DOCTYPE html>
+            <html lang="tr">
+            <head>
+                <meta charset="UTF-8">
+                <title>Customer Manager</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 40px; background: #f8f9fa; color: #333; }
+                    .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+                    input[type="text"], input[type="email"] { padding: 8px; width: calc(100%% - 18px); margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
+                    button, .btn { padding: 8px 15px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
+                    button:hover, .btn:hover { background: #0056b3; }
+                    .btn-secondary { background: #6c757d; }
+                    .btn-secondary:hover { background: #5a6268; }
+                    table { width: 100%%; border-collapse: collapse; margin-top: 20px; }
+                    th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; }
+                    th { background: #f1f3f5; }
+                    .message { padding: 10px; background: #d4edda; color: #155724; border-radius: 4px; margin-bottom: 15px; }
+                    .error { padding: 10px; background: #f8d7da; color: #721c24; border-radius: 4px; margin-bottom: 15px; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h2>Müşteri Yönetim Sistemi</h2>
+                    
+                    %s
+                    %s
+
+                    <!-- Arama ve Filtre Sıfırlama Alanı -->
+                    <form method="GET" action="/" style="margin-bottom: 20px;">
+                        <input type="text" name="q" value="%s" placeholder="Müşteri ara (Ad, Soyad, Email)..." style="width: 70%%; display: inline-block;">
+                        <button type="submit" style="width: 10%%;">Ara</button>
+                        <a href="/" class="btn btn-secondary" style="padding: 8px 10px; font-size: 13px;">Tümünü Göster</a>
+                    </form>
+
+                    <!-- Ekleme / Düzenleme Formu -->
+                    <form action="/save" method="POST" style="background: #fdfdfe; padding: 15px; border: 1px solid #e1e4e8; border-radius: 6px;">
+                        <h3>%s</h3>
+                        <input type="hidden" name="id" value="%d">
+                        <label>Ad:</label>
+                        <input type="text" name="firstName" value="%s" required>
+                        <label>Soyad:</label>
+                        <input type="text" name="lastName" value="%s" required>
+                        <label>E-posta:</label>
+                        <input type="email" name="email" value="%s" required>
+                        <br>
+                        <button type="submit">%s</button>
+                        %s
+                    </form>
+
+                    <!-- Müşteri Listesi Tablosu -->
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Ad</th>
+                                <th>Soyad</th>
+                                <th>E-posta</th>
+                                <th>İşlemler</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            %s
+                        </tbody>
+                    </table>
+                </div>
+            </body>
+            </html>
+            """.formatted(
+                message.isBlank() ? "" : "<div class='message'>" + escape(message.replace("+", " ")) + "</div>",
+                error.isBlank() ? "" : "<div class='error'>" + escape(error) + "</div>",
+                escape(query),
+                isEditing ? "Müşteriyi Düzenle" : "Yeni Müşteri Ekle",
+                editId,
+                escape(firstName),
+                escape(lastName),
+                escape(email),
+                isEditing ? "Güncelle" : "Kaydet",
+                isEditing ? "<a href='/' class='btn btn-secondary' style='margin-left: 10px;'>Vazgeç</a>" : "",
+                rows.toString()
+            );
     }
 
-    private static boolean validName(String value) {
-        return !value.isBlank() && value.length() <= 60
-                && value.chars().noneMatch(ch -> Character.isISOControl(ch));
-    }
-
-    private static Map<String, String> parse(String input) {
-        Map<String, String> result = new HashMap<>();
-        if (input == null || input.isBlank()) return result;
-        for (String pair : input.split("&")) {
-            String[] parts = pair.split("=", 2);
-            result.put(URLDecoder.decode(parts[0], StandardCharsets.UTF_8),
-                    URLDecoder.decode(parts.length == 2 ? parts[1] : "", StandardCharsets.UTF_8));
-        }
-        return result;
-    }
-
-    private static void redirect(HttpExchange exchange, String message) throws IOException {
-        exchange.getResponseHeaders().set("Location", "/?message=" + message);
-        exchange.sendResponseHeaders(303, -1);
-    }
-
-    private static void send(HttpExchange exchange, int status, String content) throws IOException {
-        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
-        exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
-        exchange.getResponseHeaders().set("Cache-Control", "no-store");
-        exchange.sendResponseHeaders(status, bytes.length);
-        exchange.getResponseBody().write(bytes);
+    private static String escape(String input) {
+        if (input == null) return "";
+        return input.replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                    .replace("\"", "&quot;")
+                    .replace("'", "&#x27;");
     }
 }
