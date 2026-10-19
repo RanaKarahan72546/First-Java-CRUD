@@ -90,3 +90,4 @@ This version implements the CRUD functions using Java's built-in HTTP server
 and a CSV file instead of Spring/Vaadin.
 <img width="1730" height="967" alt="image" src="https://github.com/user-attachments/assets/de47a588-3945-4511-86c5-80ebc86161eb" />
 <img width="1727" height="875" alt="image" src="https://github.com/user-attachments/assets/7846e52a-ccfe-497b-b412-82c31b4221c8" />
+<img width="1887" height="924" alt="Screenshot 2026-10-19 201805" src="https://github.com/user-attachments/assets/fd92af96-9055-4b74-ae02-674cf43b7eb7" />
